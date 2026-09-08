@@ -1,0 +1,18 @@
+replay: loaded C:\t17rr_0906\decode_layer_f3best_4096x12288_d256_g32_s128_a2_kv4_mc_preq_vexp_vreg_dq8_qp_mxp_ub_amac_nokv_tb_rr.xclbin
+replay: kernel group_ids: [0]=327679 [1]=262145 [2]=327679 [3]=262144 [4]=262144 [5]=262144 [6]=262144 [7]=262144
+replay: insts=3172B ninstr=3172 opcode=3
+replay: bo0 (arg3) = 4194304 B [file] pre-csum=524d3927699d0383
+replay: bo1 (arg4) = 4194304 B pre-csum=a145779c816b8383
+replay: bo2 (arg5) = 4194304 B pre-csum=18cce277b28a8383
+replay: bo3 (arg6) = 4194304 B pre-csum=271d0ad38c3b8383
+replay: bo4 (arg7) = 4194304 B pre-csum=78c08b1d88a48383
+replay: dispatching (timeout 10s)...
+replay: first dispatch state=4 (COMPLETED) in 7578 us
+replay: bo0 post-csum=578da392cd6c188a nonzero=4169564/4194304
+replay: bo1 post-csum=a145779c816b8383 nonzero=4186112/4194304
+replay: bo2 post-csum=18cce277b28a8383 nonzero=4186112/4194304
+replay: bo3 post-csum=271d0ad38c3b8383 nonzero=4186112/4194304
+replay: bo4 post-csum=78c08b1d88a48383 nonzero=4186112/4194304
+replay: wrote bo0 -> replay_bo0_out.bin (4194304 B)
+replay: 3 iters total 14714 us = 4904.7 us/dispatch (203.89 dispatch/s)
+replay: OK

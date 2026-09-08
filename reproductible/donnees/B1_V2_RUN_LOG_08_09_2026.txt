@@ -1,0 +1,36 @@
+==========================================================================
+B1 v2 — décomposition temporelle, protocole spécifié (5 BO = 0xAA, BOs persistants)
+==========================================================================
+ctrlcode: 02580f411439e8dc... (attendu 02580f41... = gel A)
+gids = [655359, 589825, 655359, 589824, 589824, 589824, 589824, 589824]
+T_alloc+fill = 1537.9 us   T_H2D_sync = 189.8 us (1x, hors boucle)
+warmup: cycle=   9212.1us  submit=   65.2  npu_wait=  7740.4  d2h=  104.2  read= 1302.3
+warmup: cycle=   6135.9us  submit=   50.9  npu_wait=  4985.1  d2h=   53.8  read= 1046.1
+warmup: cycle=   6478.1us  submit=   47.6  npu_wait=  4920.1  d2h=   90.4  read= 1420.0
+run01: cycle=   6050.8us  submit=   64.3  npu_wait=  4886.5  d2h=   51.0  read= 1049.0
+run02: cycle=   6375.1us  submit=   52.3  npu_wait=  4873.8  d2h=   61.9  read= 1387.1
+run03: cycle=   6403.8us  submit=   72.1  npu_wait=  4935.4  d2h=   58.7  read= 1337.6
+run04: cycle=   6033.3us  submit=   48.3  npu_wait=  4866.1  d2h=   52.5  read= 1066.4
+run05: cycle=   6558.0us  submit=   42.2  npu_wait=  4908.4  d2h=   89.9  read= 1517.5
+run06: cycle=   6169.0us  submit=   57.6  npu_wait=  4902.3  d2h=   51.6  read= 1157.5
+run07: cycle=   6366.0us  submit=   55.2  npu_wait=  4886.2  d2h=   59.9  read= 1364.7
+run08: cycle=   6027.4us  submit=   53.0  npu_wait=  4860.3  d2h=   50.1  read= 1064.0
+run09: cycle=   6072.6us  submit=   58.8  npu_wait=  4909.9  d2h=   50.7  read= 1053.2
+run10: cycle=   6196.1us  submit=   40.8  npu_wait=  4869.0  d2h=   58.1  read= 1228.2
+--------------------------------------------------------------------------
+DETERMINISME : 1 SHA distinct sur 10 runs -> True
+SHA protocole specifie : df78300f8b6364169706285ee1cc9aa0f6da921f722cc8d97a8ef5d6546d54f4
+SHA attendu (B1.2)     : df78300f8b6364169706285ee1cc9aa0f6da921f722cc8d97a8ef5d6546d54f4
+--------------------------------------------------------------------------
+phase                moy(us)   med(us)   min(us)   max(us)      sd  %cycle
+us_submit               54.5      54.1      40.8      72.1     9.5    0.9%
+us_npu_wait           4889.8    4886.3    4860.3    4935.4    23.9   78.5%
+us_d2h_sync             58.4      55.3      50.1      89.9    11.9    0.9%
+us_readout            1222.5    1192.9    1049.0    1517.5   170.0   19.6%
+us_dispatch_cycle     6225.2    6182.6    6027.4    6558.0   188.2   100.0
+CSV écrit : E:\trixdna_test\docs\B1_DECOMPOSE_V2_08_09_2026.csv
+--------------------------------------------------------------------------
+COUTS 1x (par layer runtime) : alloc+fill=1538us  H2D=190us
+PARTS du cycle dispatch      : NPU=78.5%  D2H=0.9%  host(submit+read)=20.5%
+DECISION B3 : CAS 2 : NPU << cycle, wait/staging >> NPU -> runtime/XRT/BO
+==========================================================================
