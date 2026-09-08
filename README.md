@@ -576,3 +576,502 @@ Original project-specific code, scripts, experimental integration work and docum
    https://github.com/huggingface/transformers
 6. Qwen Team — Qwen
    https://github.com/QwenLM
+update # XDNA2 NPU — Qwen3.5-9B — Reproducible Validation
+
+## Current status — 08/09/2026
+
+This repository contains a frozen, reproducible validation chain for the AMD XDNA2 NPU on Windows/Strix Point, with a focus on the `f3best` full-K kernel used by the Qwen3.5-9B path.
+
+The current state must be separated into two distinct claims:
+
+1. **The `f3best` RR full-K NPU dispatch is validated.**
+2. **End-to-end semantic Qwen3.5-9B generation at the previously observed ~34 tok/s is NOT validated.**
+
+These are different validation levels and must not be conflated.
+
+---
+
+## Validation status
+
+| Area                               | Status         | Meaning                                                           |
+| ---------------------------------- | -------------- | ----------------------------------------------------------------- |
+| Frozen `f3best` ctrlcode           | PASS           | Byte-identical to the frozen reference artifact                   |
+| Frozen `f3best` xclbin             | PASS           | Reproducible geometry / ctrlcode contract                         |
+| XDNA2 dispatch                     | PASS           | Kernel reaches `state=4` deterministically                        |
+| BO ABI                             | PASS           | 5 data BOs + instruction BO, exact argument contract              |
+| BO dependency                      | PASS           | `bo1..bo4` demonstrably affect the result                         |
+| All-AA deterministic replay        | PASS           | Inter-process deterministic output                                |
+| Steady-state NPU execution         | PASS           | ~4.89 ms NPU wait                                                 |
+| Host submit overhead               | LOW            | ~54.5 µs                                                          |
+| Forced 4 MiB readback              | ARTIFICIAL     | Diagnostic only, not representative of runtime                    |
+| Full numerical f3best semantics    | NOT YET CLOSED | Determinism is not numerical correctness                          |
+| Qwen3.5-9B E2E semantic generation | NOT CLOSED     | Still the active integration target                               |
+| ~34 tok/s E2E claim                | NOT VALIDATED  | Previous mechanical benchmark was not a semantic throughput proof |
+
+---
+
+# 1. Frozen f3best witness
+
+The frozen artifact is:
+
+**f3best — 9B — s128 — a2_kv4 — RR — full-K**
+
+The ctrlcode is 3172 bytes / 793 words.
+
+The frozen ctrlcode is byte-for-byte identical to the corresponding reference artifact used in the previous functional runtime.
+
+The frozen xclbin and ctrlcode are recorded together with SHA-256 provenance in the reproducibility package.
+
+The purpose of this artifact is to establish a stable NPU execution target before attempting further end-to-end integration.
+
+---
+
+# 2. Important correction to the previous witness
+
+The first A2 replay used:
+
+* `bo0 = 0xAA`
+* `bo1..bo4` not explicitly initialized by the replay tool
+
+Therefore the original output hash was process-dependent.
+
+That result must **not** be used as the byte-level reproducibility contract.
+
+The corrected reproducibility contract initializes all five data BOs to `0xAA`.
+
+The official deterministic witness is therefore:
+
+* 5 data BOs
+* 4 MiB each
+* all initialized to `0xAA`
+* instruction BO containing the frozen ctrlcode
+* `arg0 = 3`
+* `arg1 = instruction BO`
+* `arg2 = 3172`
+* `arg3..arg7 = data BOs`
+
+Expected state:
+
+```text
+state = 4
+```
+
+Expected deterministic output:
+
+```text
+SHA256:
+df78300f8b6364169706285ee1cc9aa0f6da921f722cc8d97a8ef5d6546d54f4
+```
+
+The corresponding diagnostic output contains the expected BF16 pattern over the useful output region, with the remaining bytes retaining the initialized BO pattern.
+
+---
+
+# 3. BO dependency was independently demonstrated
+
+A zero-control experiment was performed with:
+
+```text
+bo0 = 0xAA
+bo1..bo4 = 0x00
+```
+
+The kernel still reached:
+
+```text
+state = 4
+```
+
+but produced an all-zero useful output.
+
+This proves that the kernel does not operate solely on `bo0`.
+
+Therefore the previous process-dependent A2 witness was explained by the fact that the replay tool did not initialize all input BOs.
+
+The corrected B1 protocol removes this ambiguity.
+
+---
+
+# 4. B1 temporal decomposition
+
+B1 uses persistent BOs and separates the host-side components of one dispatch.
+
+Protocol:
+
+```text
+3 warmup runs
+10 measured runs
+5 × 4 MiB data BOs
+persistent allocation
+single H2D initialization
+NPU execution
+D2H synchronization
+forced 4 MiB diagnostic readback
+```
+
+Measured steady-state values:
+
+| Component                 |        Time |
+| ------------------------- | ----------: |
+| Host `submit()`           |    ~54.5 µs |
+| NPU wait                  | ~4,889.8 µs |
+| D2H synchronization       |    ~58.4 µs |
+| Forced 4 MiB CPU read     | ~1,222.5 µs |
+| Complete diagnostic cycle | ~6,225.2 µs |
+
+The critical number is:
+
+```text
+NPU wait ≈ 4.89 ms
+```
+
+This matches the independent `xclbin_replay` measurement of approximately:
+
+```text
+4.905 ms
+```
+
+The difference is approximately 0.3%.
+
+Therefore the ~4.9 ms execution time is a real steady-state NPU/AIE execution cost.
+
+It is not explained by:
+
+* XRT `submit()` overhead
+* host-side synchronization
+* the diagnostic readback
+* BO allocation churn
+
+---
+
+# 5. Important interpretation of the 4.89 ms
+
+The 4.89 ms number must be described carefully.
+
+It is the time spent waiting for completion of the AIE/XDNA2 execution.
+
+It does **not** mean that 4.89 ms is pure matrix multiplication time.
+
+The f3best emitter contains AIE-side:
+
+* DMA descriptors
+* DMA starts
+* lock operations
+* buffer cycling
+* synchronization
+* compute operations
+
+Therefore the 4.89 ms includes the internal execution/dataflow schedule of the kernel.
+
+The next optimization target is consequently the **AIE execution/dataflow itself**, not host `submit()` overhead.
+
+---
+
+# 6. Diagnostic readback caveat
+
+The B1 protocol intentionally reads the complete 4 MiB output BO.
+
+This is a diagnostic operation and must not be interpreted as the normal runtime cost.
+
+Only approximately 72 KiB of the BO are useful for the current diagnostic.
+
+The measured:
+
+```text
+~1.22 ms
+```
+
+therefore represents an intentionally forced 4 MiB CPU-mapped read.
+
+It is not the expected production readback cost.
+
+The useful-output read is expected to be on the order of tens of microseconds rather than milliseconds.
+
+---
+
+# 7. What is proven
+
+The current evidence proves:
+
+```text
+frozen ctrlcode
+      ↓
+frozen xclbin
+      ↓
+XDNA2 registration
+      ↓
+correct kernel ABI
+      ↓
+5 data BO dependency
+      ↓
+state=4
+      ↓
+deterministic output
+      ↓
+stable ~4.89 ms NPU execution
+```
+
+This is a valid NPU execution witness.
+
+It establishes that the `f3best` RR full-K artifact is executing on the XDNA2 NPU with a reproducible ABI and deterministic diagnostic behavior.
+
+---
+
+# 8. What is NOT yet proven
+
+The following claims remain open:
+
+### Numerical correctness
+
+Deterministic output does not imply that the output is numerically correct for the intended Qwen3.5-9B computation.
+
+The current witness uses synthetic initialized BO contents.
+
+Numerical validation must compare the kernel against an independent CPU/reference implementation using controlled tensors and known expected results.
+
+### Full f3best semantic correctness
+
+The complete mathematical semantics of the fused kernel are not yet closed.
+
+### End-to-end Qwen3.5-9B generation
+
+A successful kernel dispatch does not imply that the complete Qwen3.5-9B model generates correct text.
+
+The remaining chain includes:
+
+```text
+model weights
+→ quantization/dequantization
+→ projections
+→ normalization
+→ attention / GDN
+→ KV state
+→ residuals
+→ LM head
+→ sampling
+→ token generation
+```
+
+Each stage must be validated independently before claiming end-to-end performance.
+
+---
+
+# 9. Correction regarding the previous ~34 tok/s result
+
+A previous f3best benchmark produced approximately:
+
+```text
+~33.9 tok/s
+```
+
+That result must be classified as:
+
+```text
+MECHANICAL / NON-SEMANTIC THROUGHPUT
+```
+
+It is not a validated Qwen3.5-9B semantic generation rate.
+
+Earlier measurements were also affected by an overly permissive prefix-matching condition (`min_prefix_match=1`), which could produce a false-positive generation result.
+
+Therefore:
+
+```text
+~33.9 tok/s ≠ validated Qwen3.5-9B performance
+```
+
+The number must not be used as the current performance claim.
+
+However, this does **not** invalidate the f3best kernel itself.
+
+The correct distinction is:
+
+```text
+f3best NPU dispatch:
+VALIDATED as deterministic execution
+
+f3best numerical semantics:
+NOT YET CLOSED
+
+Qwen3.5-9B E2E:
+NOT YET CLOSED
+
+~34 tok/s semantic throughput:
+NOT VALIDATED
+```
+
+---
+
+# 10. Current performance interpretation
+
+The single f3best dispatch currently costs approximately:
+
+```text
+4.89 ms
+```
+
+at the NPU execution level.
+
+A purely arithmetic conversion would give:
+
+```text
+1000 / 4.89 ≈ 204 dispatches/s
+```
+
+but this must NOT be interpreted as tokens/s.
+
+One Qwen token requires multiple layer operations and multiple dispatches.
+
+Therefore the correct next step is to establish:
+
+```text
+number of f3best dispatches / token
+×
+4.89 ms / dispatch
+```
+
+and then add:
+
+```text
+GDN layers
+attention layers
+KV handling
+host orchestration
+other NPU kernels
+CPU work
+synchronization
+```
+
+Only that complete composition can produce a defensible tokens/s estimate.
+
+---
+
+# 11. Current bottleneck hypothesis
+
+The current B1 evidence changes the optimization priority.
+
+The immediate problem is no longer:
+
+```text
+"XRT submit is too slow"
+```
+
+or:
+
+```text
+"the 4 MiB readback is dominating the kernel"
+```
+
+for the single-dispatch protocol.
+
+Instead, the primary target is:
+
+```text
+AIE-side execution/dataflow
+```
+
+including:
+
+* internal DMA
+* lock synchronization
+* buffer scheduling
+* tile utilization
+* compute occupancy
+* memory movement inside the AIE graph
+* possible stalls between producer/consumer stages
+
+The `.bin` transaction stream and the emitter source should therefore be correlated with the measured 4.89 ms timeline.
+
+---
+
+# 12. Recommended validation sequence
+
+The remaining work should proceed in this order:
+
+```text
+A — Frozen artifact
+    CLOSED
+
+B1 — Temporal decomposition
+     CLOSED
+
+B2 — Internal transaction/dataflow decomposition
+     NEXT
+
+B3 — Numerical kernel validation
+     NEXT
+
+B4 — Real Qwen tensor integration
+     NEXT
+
+E2E — Full Qwen3.5-9B semantic generation
+      FINAL GATE
+```
+
+The E2E benchmark should only be published after the semantic output has been independently validated.
+
+---
+
+# 13. Reproducibility contract
+
+A reproduction is valid only if all of the following are satisfied:
+
+```text
+same ctrlcode SHA
+same xclbin SHA
+same instruction length
+same kernel ABI
+same BO sizes
+same BO initialization
+state = 4
+expected output SHA
+stable NPU timing
+```
+
+The all-`0xAA` five-BO protocol is the current byte-level diagnostic witness.
+
+The older witness using uninitialized `bo1..bo4` is retained only as historical evidence and must not be presented as the canonical reproducibility result.
+
+---
+
+# 14. Repository structure
+
+```text
+reproductible/
+├── MANIFEST.md
+├── SHA256SUMS.txt
+│
+├── temoin/
+│   └── frozen f3best RR full-K artifact
+│
+├── donnees/
+│   └── B1 measurements / raw outputs
+│
+├── rapports/
+│   ├── ANGLE_A_GEL_T17RR0906_08_09_2026.md
+│   └── B1_RAPPORT_DECOMPOSITION_08_09_2026.md
+│
+├── scripts/
+│   ├── b1_decompose.py
+│   ├── b1_decompose_v2.py
+│   ├── b1_diag_allaa.py
+│   ├── b1_diag_zerobo.py
+│   ├── decode_t17_order.py
+│   └── decode_t17_txn.py
+│
+└── sources/
+    ├── compile_f3best_9b_s128_rr.py
+    └── f3best_emit_nokv.py
+```
+
+---
+
+# 15. Bottom line
+
+The current state is:
+
+**The f3best RR full-K kernel is a real, deterministic XDNA2 execution artifact with a measured steady-state NPU execution time of approximately 4.89 ms per dispatch.**
+
+**The previous ~34 tok/s result is not a valid semantic Qwen3.5-9B throughput claim.**
+
+**The next bottleneck investigation should focus on the AIE-side dataflow and internal DMA/lock schedule, followed by numerical validation and only then full end-to-end generation.**
