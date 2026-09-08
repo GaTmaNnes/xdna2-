@@ -279,3 +279,202 @@ La priorité concrète est donc :
 8. Optimiser les dispatchs seulement après égalité numérique.
 Le correctif le plus probable est une combinaison « mapping GQA + stride/layout de V + réduction softmax par blocs ». C’est là que je concentrerais immédiatement l’investigation.
 
+eeXDNA2 Experimental LLM Runtime
+
+Experimental work on accelerating LLM inference on AMD XDNA2 NPUs through a custom ggml/llama.cpp backend and dedicated AIE kernels.
+
+The repository is intended to provide a reproducible environment for testing and characterizing XDNA2 inference, including decode performance, kernel execution, memory behavior, and heterogeneous CPU/NPU execution.
+
+Project scope
+
+The current implementation includes:
+
+* Experimental ggml-xdna backend
+* XDNA2 NPU execution path
+* INT4 GEMV kernels
+* INT4 SwiGLU kernels
+* FlowKV / attention experiments
+* Compiled .xclbin and .insts kernel artifacts
+* llama.cpp integration
+* Reproducibility scripts
+* Reference Qwen3.5 implementation
+* Performance and validation experiments
+
+The compiled kernel artifacts included in the repository correspond to the configurations used for the documented experiments.
+
+Upstream projects and technical references
+
+This work builds upon and references several open-source projects.
+
+llama.cpp / ggml
+
+Repository:
+
+https://github.com/ggml-org/llama.cpp
+
+llama.cpp provides the inference engine and ggml execution framework used as the host architecture for the experimental XDNA2 backend.
+
+License: MIT
+
+Copyright and licensing remain with the respective upstream authors.
+
+AMD IRON
+
+Repository:
+
+https://github.com/amd/IRON
+
+IRON provides open-source infrastructure and examples for programming AMD Ryzen AI NPUs.
+
+The project includes NPU-oriented kernels and examples covering operations relevant to LLM inference, including matrix operations, attention-related workloads and other AIE compute primitives.
+
+License: Apache License 2.0.
+
+MLIR-AIE
+
+Repository:
+
+https://github.com/Xilinx/mlir-aie
+
+MLIR-AIE provides the compiler infrastructure and programming model used for targeting AMD/Xilinx AI Engine architectures.
+
+It includes tooling for generating executable NPU artifacts and instruction streams used by AIE applications.
+
+License: Apache License 2.0 with LLVM exceptions where applicable.
+
+AMD XDNA
+
+Repository:
+
+https://github.com/amd/xdna-driver
+
+The AMD XDNA open-source project provides architecture and runtime references for XDNA-based accelerators and is an important technical reference for understanding the execution environment targeted by this project.
+
+Refer to the upstream repository for the licenses applicable to individual components.
+
+Hugging Face Transformers / Qwen3.5
+
+Repository:
+
+https://github.com/huggingface/transformers
+
+Qwen:
+
+https://github.com/QwenLM
+
+The Qwen3.5 reference implementation is used for architectural and numerical comparison with the accelerated implementation.
+
+The corresponding Transformers implementation is distributed under the Apache License 2.0.
+
+Copyright remains with the Qwen Team, Hugging Face, and the respective upstream contributors.
+
+Architecture
+
+The experimental execution stack can be summarized as:
+
+Qwen3.5
+   |
+   v
+llama.cpp / ggml
+   |
+   v
+ggml-xdna
+   |
+   +-----------------------+
+   |                       |
+   v                       v
+Host execution        XDNA2 execution
+                           |
+                  +--------+--------+
+                  |        |        |
+                  v        v        v
+               GEMV     SwiGLU    FlowKV
+                  \        |        /
+                   \       |       /
+                    v      v      v
+                  AIE kernels
+                       |
+                       v
+                .xclbin / .insts
+
+Kernel artifacts
+
+The repository contains compiled kernel configurations used by the experimental runtime.
+
+These include kernels targeting operations such as:
+
+* INT4 GEMV
+* INT4 SwiGLU
+* FlowKV
+* attention-related execution paths
+
+.xclbin and .insts files are executable artifacts consumed by the XDNA2 execution path.
+
+Different kernel variants correspond to different tensor dimensions and execution configurations required by the model.
+
+Keeping the tested artifacts together with the runtime allows benchmark configurations to remain reproducible.
+
+Reproducibility
+
+The repository is designed around reproducible measurements rather than isolated peak-performance results.
+
+When comparing configurations, relevant parameters should therefore be recorded, including:
+
+* model
+* quantization
+* context size
+* prompt length
+* generated token count
+* kernel configuration
+* CPU/NPU placement
+* runtime version
+* thermal conditions
+* prefill throughput
+* decode throughput
+
+Throughput is expressed in tokens per second (tokens/s).
+
+Prefill and decode measurements should be considered separately because they exercise substantially different computational and memory-access patterns.
+
+Experimental status
+
+This project is research and experimental software.
+
+The XDNA2 backend and kernels are under active development. Performance characteristics, kernel selection and supported model configurations may therefore change between revisions.
+
+Results should be associated with the exact repository revision and test configuration used to produce them.
+
+Licensing and attribution
+
+This repository combines original experimental work with interfaces, references and components from open-source projects.
+
+Major upstream projects include:
+
+Project	Upstream	License
+llama.cpp / ggml	https://github.com/ggml-org/llama.cpp	MIT
+AMD IRON	https://github.com/amd/IRON	Apache-2.0
+MLIR-AIE	https://github.com/Xilinx/mlir-aie	Apache-2.0 / LLVM exceptions where applicable
+AMD XDNA	https://github.com/amd/xdna-driver	See upstream component licenses
+Hugging Face Transformers	https://github.com/huggingface/transformers	Apache-2.0
+Qwen	https://github.com/QwenLM	See individual model/repository license
+
+Each upstream component remains subject to its respective copyright and license terms.
+
+Original project-specific code, scripts, experimental integration work and documentation should be considered separately from third-party components and retain the licensing specified by this repository.
+
+References
+
+1. ggml-org — llama.cpp
+    https://github.com/ggml-org/llama.cpp
+2. AMD — IRON
+    https://github.com/amd/IRON
+3. AMD/Xilinx — MLIR-AIE
+    https://github.com/Xilinx/mlir-aie
+4. AMD — XDNA
+    https://github.com/amd/xdna-driver
+5. Hugging Face — Transformers
+    https://github.com/huggingface/transformers
+6. Qwen Team — Qwen
+    https://github.com/QwenLM
+
+
