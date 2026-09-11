@@ -1074,4 +1074,212 @@ The current state is:
 
 **The previous ~34 tok/s result is not a valid semantic Qwen3.5-9B throughput claim.**
 
-**The next bottleneck investigation should focus on the AIE-side dataflow and internal DMA/lock schedule, followed by numerical validation and only then full end-to-end generation.**
+**The next bottleneck investigation should focus on the AIE-side dataflow and internal DMA/lock schedule, followed by numerical validation and only then full end-to-end generation.**      
+
+
+NA2 / ggml-xdna — Technical Status Update (11 Sep 2026)
+
+Current technical status as of 11 Sep 2026.
+This section supersedes the historical README status that described the project as of 4 Sep 2026.
+
+Current Status
+
+This repository has moved beyond the demonstration of clean NPU execution paths. The current work is focused on bit-exact differential diagnosis of an end-to-end numerical corruption observed on the XDNA2 NPU path.
+
+The investigation is split into two distinct tracks:
+
+B4→B9: hardware/data-path attribution — CLOSED, no fix required
+
+STAGE: numerical corruption localization — IN PROGRESS
+
+B4→B9 — Hardware/Data-Path Attribution: CLOSED
+
+Question
+
+Does the DMA fail to read Q, or is there a +0x240000 offset / lost Q fill region?
+
+Final result
+
+No corrective change is required.
+
+The investigation established the following:
+
+No +0x240000 offset was demonstrated.
+
+No lost Q fills were demonstrated.
+
+Memtile BDs form a generic ring and do not encode a Q/O/G/U/D-specific distinction.
+
+Shim BDs operate on the full frame.
+
+The runtime passes the full BO; there is no section-level patch that removes Q.
+
+The earlier B4/B6/B6d influence maps are retired as causal evidence because they were obtained under a degenerate KV regime.
+
+B6F repeated the visibility experiment with valid randomized bf16 KV data and confirmed that the Q prefix is active.
+
+B6F replay matched T0 and all 10 dispatches completed successfully.
+
+The B4→B9 track is therefore closed without modifying the runtime.
+
+Important correction to the earlier interpretation
+
+The +0x240000 hypothesis came from influence maps obtained under a degenerate regime where constant K caused uniform softmax behavior and made attention insensitive to Q. Those maps were not sufficient to establish a missing-Q or DMA-offset bug.
+
+The corrected B6F experiment removed that ambiguity by using randomized bf16 KV data and directly restored Q sensitivity.
+
+STAGE — Numerical Corruption Diagnosis: IN PROGRESS
+
+Objective
+
+Identify the first buffer or tensor that diverges from the correct CPU reference on the NPU path, and determine whether the divergence is caused by computation, packing, buffer state, planning, or synchronization.
+
+Established results
+
+STAGE 4 — GEMV INT4 K4096→N8192
+
+The GEMV INT4 K4096→N8192 path was independently cleared:
+
+5/5 probes passed.
+
+Maximum observed difference was 2 bf16 ULP.
+
+The result was consistent across the tested Q/K/V/gate probes.
+
+This path is therefore not currently considered the source of the observed corruption.
+
+STAGE 5 — First-layer corruption
+
+The first fused layer is already corrupted on affected execution paths.
+
+The GEMV K4096→N4096 path using the real SSM weights was also cleared by the corresponding differential checks.
+
+STAGE 5C — SwiGLU isolation
+
+The control matrix established that SwiGLU alone does not explain the corruption.
+
+The current evidence points instead toward an interaction involving the fused data path, buffer state, packing, or execution plan.
+
+STAGE 5G-B — First divergent node
+
+Nodes 16 and 17 of block 31 are clean:
+
+SHA-256 matches the reference.
+
+Binary comparison reports no differences.
+
+The first currently localized divergence is:
+
+Node 44 — CONT gate_reshaped-31
+
+Observed signature:
+
+sentinel / poison pattern: 0x7FC1
+
+the buffer is only partially written
+
+at M=2, 3824 / 8192 values become NaN with the same 0x7FC1 pattern
+
+the same behavior is not reproduced at the same location for the M=4 and M=11 regimes
+
+This is currently the strongest diagnostic signal in the project.
+
+Current Working Interpretation
+
+The evidence no longer points to a missing-Q or simple attention-layout problem.
+
+The strongest current hypothesis is:
+
+A partial buffer write occurs under specific M-dependent execution conditions.
+
+This is not yet sufficient to assign the fault to a specific layer of the stack. The remaining possibilities include:
+
+host-side packing of the fused weight buffer;
+
+buffer reuse or lifetime;
+
+GEMV output / input hand-off into the following operation;
+
+execution-plan partitioning;
+
+incomplete or conditional writes;
+
+synchronization / completion visibility.
+
+No single one of these has yet been proven as the root cause.
+
+Next Experiments
+
+The current investigation proceeds in this order:
+
+1. STAGE 5C-A.2 — Bit-exact fused-weight comparison
+
+Compare the C++ w_fused_bo contents directly against the Python reference blob.
+
+The comparison must be byte-for-byte and must record:
+
+SHA-256;
+
+raw size;
+
+exact offsets;
+
+representative byte samples;
+
+the region corresponding to the affected gate_reshaped-31 data.
+
+This separates:
+
+C++ packing is wrong
+
+from
+
+the design/runtime expects a different layout.
+
+2. STAGE 5C-B — c_bo census
+
+Use the existing XDNA_NAN_SWEEP instrumentation to identify which GEMV buffer regions become invalid and whether the same M-dependent write boundary is reproduced.
+
+3. STAGE 5G-B(a) — Single-plan test
+
+Run:
+
+XDNA_LAYER_PLAN=1
+
+on node 44 to test the hypothesis that the corruption is caused by an execution-plan hole or partitioning decision.
+
+4. STAGE 5D — GEMV implementation matrix
+
+Repeat the A..F control matrix with:
+
+XDNA_DISABLE_GEMV_INT4_V2=1
+
+This determines whether the V2 GEMV implementation participates in the observed corruption.
+
+5. STAGE 6
+
+Proceed only after the first-divergent-buffer investigation has been completed and the responsible mechanism has been narrowed sufficiently.
+
+Diagnostic Rules
+
+The following conclusions are now considered closed unless new experimental evidence directly contradicts them:
+
+no demonstrated +0x240000 Q offset;
+
+no demonstrated lost Q fills;
+
+no current evidence for a BD/SHIM geometry correction;
+
+no current evidence that RMSNorm arithmetic alone is the root cause;
+
+no current evidence that GEMV INT4 K4096→N8192 arithmetic is the root cause.
+
+The project should therefore remain focused on the first divergent buffer and the M-dependent partial-write signature.
+
+Repository Integrity
+
+This update documents experimental results, diagnostic conclusions, and the remaining test sequence.
+
+It does not represent a corrective modification to ggml-xdna.cpp.
+
+No runtime fix is claimed at this stage.
