@@ -1283,3 +1283,333 @@ This update documents experimental results, diagnostic conclusions, and the rema
 It does not represent a corrective modification to ggml-xdna.cpp.
 
 No runtime fix is claimed at this stage.
+
+
+# MODEL-DRIVEN XDNA2 CODEGEN
+
+The project evolves from a fixed kernel/runtime architecture toward a
+model-specialized compiler that generates the XDNA2 execution program
+directly from the target model.
+
+The model is treated as compiler input.
+
+                         MODEL
+                           │
+                           ▼
+                 ┌─────────────────────┐
+                 │   MODEL ANALYZER     │
+                 │                     │
+                 │ • architecture     │
+                 │ • tensors/shapes    │
+                 │ • quantization      │
+                 │ • attention/KV      │
+                 │ • memory footprint  │
+                 │ • dependencies      │
+                 └──────────┬──────────┘
+                            │
+                            ▼
+                 ┌─────────────────────┐
+                 │       MODEL IR       │
+                 └──────────┬──────────┘
+                            │
+             ┌──────────────┼──────────────┐
+             ▼              ▼              ▼
+        COMPUTE IR      MEMORY IR      SCHEDULE IR
+             │              │              │
+             └──────────────┼──────────────┘
+                            ▼
+                 ┌─────────────────────┐
+                 │    XDNA2 CODEGEN     │
+                 │                     │
+                 │ • GEMV/GEMM         │
+                 │ • FFN/SwiGLU        │
+                 │ • attention         │
+                 │ • DMA               │
+                 │ • memory layout     │
+                 │ • tile placement    │
+                 │ • synchronization   │
+                 │ • fusion            │
+                 │ • precision         │
+                 └──────────┬──────────┘
+                            │
+                            ▼
+                 ┌─────────────────────┐
+                 │ XDNA2 EXECUTABLE     │
+                 │                     │
+                 │ xclbin / PDI        │
+                 │ instruction stream  │
+                 │ BO/DMA plan         │
+                 │ kernel metadata     │
+                 └──────────┬──────────┘
+                            │
+                            ▼
+                       XDNA2 NPU
+                            │
+                            ▼
+                     VALIDATED OUTPUT
+
+
+## CORE PRINCIPLE
+
+There is no fixed universal kernel catalog.
+
+For each model/configuration, the compiler generates a specialized
+XDNA2 program optimized for:
+
+    model architecture
+    tensor shapes
+    quantization
+    memory layout
+    NPU topology
+    tile allocation
+    DMA traffic
+    synchronization
+    operator fusion
+    CPU/NPU placement
+    context configuration
+
+The generated program is compiled once and cached.
+
+Decode then reuses the specialized executable instead of recompiling
+for every token.
+
+
+## SPECIALIZATION KEY
+
+A generated executable is uniquely associated with:
+
+    MODEL_HASH
+    ARCHITECTURE
+    QUANTIZATION
+    TENSOR_SHAPES
+    CONTEXT_CONFIGURATION
+    NPU_TOPOLOGY
+    MEMORY_BUDGET
+    COMPILER_VERSION
+
+Example:
+
+    model + Q4/Q8 + sequence shape + context
+        │
+        ▼
+    specialized XDNA2 program
+        │
+        ▼
+    compile
+        │
+        ▼
+    cache
+        │
+        ▼
+    repeated inference
+
+
+## COMPILER OPTIMIZATION SPACE
+
+The compiler jointly optimizes:
+
+    COMPUTE
+      ├─ GEMV
+      ├─ GEMM
+      ├─ FFN
+      ├─ SwiGLU
+      ├─ attention
+      └─ normalization
+
+    MEMORY
+      ├─ tensor packing
+      ├─ BO layout
+      ├─ L1/L2 placement
+      ├─ DMA descriptors
+      ├─ read/write regions
+      └─ cache reuse
+
+    EXECUTION
+      ├─ tile assignment
+      ├─ column utilization
+      ├─ synchronization
+      ├─ instruction ordering
+      ├─ fusion
+      └─ CPU/NPU partitioning
+
+    PRECISION
+      ├─ INT4
+      ├─ INT8
+      ├─ BF16/FP16
+      └─ mixed precision
+
+
+## COST MODEL
+
+Optimization is not based only on theoretical TOPS.
+
+The compiler evaluates:
+
+    total_cost =
+        compute
+      + DMA
+      + memory movement
+      + synchronization
+      + submission
+      + mapping
+      + host overhead
+      + readback
+
+This allows the generated program to optimize the complete
+CPU → BO → DMA → NPU → DMA → CPU execution path.
+
+
+## MODEL-SPECIFIC MEMORY GENERATION
+
+Memory layout becomes part of compilation rather than a fixed
+runtime assumption.
+
+Example model-specific weight packing:
+
+    [ Q | O | GATE | UP | DOWN ]
+
+    256 + 256 + 768 + 768 + 768 tiles
+    = 2816 tiles
+
+Observed memory regions and read/write sets become explicit compiler
+invariants.
+
+Example:
+
+    0x240000 = 9 × 256 KiB
+
+    affected region:
+    [0x240000, 0x480000)
+
+The compiler therefore generates both:
+
+    COMPUTE PLAN
+    MEMORY / DMA PLAN
+
+as one coupled program.
+
+
+## AUTOTUNING
+
+The generator can emit several legal variants:
+
+    Variant A
+      tile layout A
+      DMA schedule A
+      column allocation A
+
+    Variant B
+      tile layout B
+      DMA schedule B
+      column allocation B
+
+    Variant C
+      fused operators
+      different memory placement
+      different synchronization
+
+Each variant is:
+
+    1. compiled
+    2. validated against golden output
+    3. checked for corruption / NaN
+    4. benchmarked
+    5. scored by the cost model
+
+The best valid variant is cached.
+
+
+## COMPILATION PIPELINE
+
+    GGUF / ONNX / model
+             │
+             ▼
+       Model Analyzer
+             │
+             ▼
+          Model IR
+             │
+             ├── Compute IR
+             ├── Memory IR
+             └── Schedule IR
+             │
+             ▼
+        XDNA2 lowering
+             │
+             ▼
+      AIE / DMA generation
+             │
+             ▼
+       xclbin / PDI / TXN
+             │
+             ▼
+       correctness tests
+             │
+             ▼
+        autotuning
+             │
+             ▼
+       executable cache
+             │
+             ▼
+       inference runtime
+
+
+## RUNTIME
+
+The runtime becomes deliberately thin.
+
+Its responsibilities are primarily:
+
+    load cached executable
+    allocate / map BOs
+    bind model buffers
+    update runtime arguments
+    submit execution
+    maintain KV state
+    synchronize
+    return generated tokens
+
+The expensive model-specific decisions are made by the compiler,
+not by a large collection of hand-written runtime special cases.
+
+
+## VALIDATION MODEL
+
+Every generated program must pass:
+
+    golden tensor comparison
+    deterministic prefix test
+    NaN / corruption detection
+    BO bounds validation
+    DMA read/write validation
+    instruction validation
+    output regression tests
+
+Existing B1–B9 investigations become regression tests rather than
+permanent runtime logic.
+
+
+## TARGET
+
+The long-term objective is:
+
+    MODEL
+      ↓
+    AUTOMATIC ANALYSIS
+      ↓
+    AUTOMATIC XDNA2 PROGRAM GENERATION
+      ↓
+    AUTOMATIC VALIDATION
+      ↓
+    AUTOMATIC AUTOTUNING
+      ↓
+    CACHED SPECIALIZED EXECUTABLE
+      ↓
+    E2E LLM INFERENCE
+
+The resulting system is therefore not simply an XDNA2 kernel library.
+
+It is a model-driven XDNA2 compiler/runtime in which the model itself
+determines the generated compute graph, memory layout, DMA schedule,
+tile allocation, synchronization and execution strategy.
