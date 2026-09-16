@@ -1,5 +1,274 @@
 
 
+# XDNA2 / Qwen3.5-9B — Current Status — 16 September 2026
+
+> **Major milestone:** the direct GGUF → XDNA2 NPU path has now completed a full end-to-end autoregressive inference run.
+>
+> This status supersedes the 11 September 2026 status where Qwen3.5-9B end-to-end generation was still marked **NOT CLOSED**.
+
+---
+
+## End-to-End Milestone
+
+The complete inference chain successfully reached completion using the real Qwen3.5-9B model state and the XDNA2 NPU execution path.
+
+Canonical test prompt:
+
+```text
+The capital of France is
+```
+
+Execution:
+
+```text
+real GGUF
+    ↓
+real tokenizer
+    ↓
+8-position prefill
+    ↓
+32-layer model chain
+    ↓
+XDNA2 NPU execution
+    ↓
+full 248,320-logit vocabulary
+    ↓
+token selection
+    ↓
+updated autoregressive state
+    ↓
+8 generated tokens
+```
+
+Observed generated token IDs:
+
+```text
+26705
+92795
+97950
+99952
+72787
+126104
+126104
+126104
+```
+
+Complete logits were produced at every generation step:
+
+```text
+248320 / 248320
+```
+
+Total wall-clock time for the current unoptimized reference implementation:
+
+```text
+418 s
+```
+
+This run establishes that the current stack can execute a complete prefill + autoregressive generation sequence instead of stopping at isolated kernels, synthetic tensors, individual transformer blocks, or partial model execution.
+
+---
+
+# Current Validation Matrix
+
+| Validation area                                    | Status                            |
+| -------------------------------------------------- | --------------------------------- |
+| NPU transport                                      | **PASS**                          |
+| Transport integrity checks                         | **PASS — 6/6 SHA**                |
+| Signed Q4_0 GEMV                                   | **~95% validated**                |
+| Complete `blk.31` differential validation          | **PASS — bit-exact**              |
+| Cross-layer validation `blk.7`                     | **PASS**                          |
+| Cross-layer validation `blk.15`                    | **PASS**                          |
+| Cross-layer validation `blk.23`                    | **PASS**                          |
+| Real model-state NPU execution                     | **PASS — tested across 8 layers** |
+| Complete 32-layer CPU chain                        | **PASS**                          |
+| Real tokenizer                                     | **PASS**                          |
+| Full vocabulary output                             | **PASS — 248,320 logits**         |
+| Full logits at every E2E step                      | **PASS**                          |
+| Resident RPC workers                               | **PASS — 7/7**                    |
+| Per-request RPC protocol                           | **PASS**                          |
+| RPC anti-replay protection                         | **PASS**                          |
+| 8-position prefill                                 | **PASS**                          |
+| 8-token autoregressive generation                  | **PASS**                          |
+| Complete E2E execution                             | **PASS**                          |
+| Strict CPU/NPU stream equivalence                  | **OPEN — T6-b**                   |
+| Exhaustive 32/32 NPU layer differential validation | **OPEN**                          |
+| Long-generation stability                          | **OPEN**                          |
+| Long-context stability                             | **OPEN**                          |
+| Optimized LM head                                  | **OPEN — G10**                    |
+| Batched GEMV                                       | **OPEN — G9**                     |
+
+---
+
+# Evidence Levels
+
+All current and future results should use the following evidence classification.
+
+## PROVEN
+
+A result reproduced with direct correctness controls such as hashes, differential comparisons, bit-exact comparisons, or complete execution.
+
+## MEASURED
+
+A directly observed quantity, but not by itself a correctness proof.
+
+## SUPPORTED HYPOTHESIS
+
+An explanation consistent with the available evidence but not yet isolated experimentally.
+
+## TARGET
+
+A projected or expected result that has not yet been demonstrated.
+
+## OPEN
+
+An unresolved validation or engineering item.
+
+---
+
+# Current Evidence Summary
+
+## PROVEN
+
+```text
+Complete 8-position prefill + 8-token generation run reaches completion.
+
+248,320 / 248,320 logits are produced at every generation step.
+
+NPU transport passes 6/6 SHA integrity controls.
+
+Signed Q4_0 GEMV path is operational.
+
+blk.31 complete differential validation is bit-exact.
+
+Cross-layer generalization has been validated on blk.7, blk.15 and blk.23.
+
+NPU execution has been exercised on real model state across 8 layers.
+
+The complete 32-layer CPU chain executes.
+
+The real tokenizer is used.
+
+The resident seven-worker RPC architecture executes the complete T6 run.
+
+The previous stale/zombie RPC response race is closed for the successful T6 configuration.
+```
+
+## MEASURED
+
+```text
+T6 end-to-end wall time: 418 s
+
+Resident launcher measurement: 10.23 ms
+
+Previous E: storage utilization during pathological pack preparation:
+approximately 98%
+
+Pack preparation before storage migration:
+up to approximately 30 minutes
+
+Pack preparation after migration to C::
+approximately 13 seconds
+```
+
+## SUPPORTED HYPOTHESIS
+
+```text
+The remaining token-0 CPU/NPU argmax divergence is caused primarily
+by numerical differences between the host FP16/FP32 golden arithmetic
+and the BF16-oriented NPU arithmetic.
+
+Confidence before T6-b validation: approximately 85%.
+```
+
+## TARGET
+
+```text
+G9 batched GEMV:
+FFN approximately 10.5 ms/token → approximately 2.6 ms/token
+
+G10 Q4_0 NPU LM head:
+current CPU head approximately 30 s → target approximately 206 ms
+```
+
+## OPEN
+
+```text
+T6-b BF16-aligned CPU golden
+
+Complete 32-layer NPU differential sweep
+
+Long autoregressive generation
+
+Long-context validation
+
+G9 batched GEMV correctness and performance
+
+G10 Q4_0 NPU LM-head correctness and performance
+```
+
+---
+
+# T6 — Complete End-to-End Execution
+
+T6 closes the previous gap between isolated NPU correctness and complete model execution.
+
+Earlier stages established correctness independently for transport, packing, signed Q4_0 GEMV, transformer blocks, model state, tokenizer handling and logits generation.
+
+T6 connects these components into one complete execution path.
+
+The successful run performs:
+
+```text
+prompt
+ ↓
+tokenization
+ ↓
+8 prefill positions
+ ↓
+model state
+ ↓
+transformer execution
+ ↓
+NPU operations
+ ↓
+complete LM output
+ ↓
+248,320 logits
+ ↓
+token selection
+ ↓
+state update
+ ↓
+next generation step
+```
+
+for eight autoregressive generation steps.
+
+The current result is therefore an **end-to-end execution validation**.
+
+It is not yet claimed as strict CPU/NPU numerical stream equivalence because T6-b remains open.
+
+---
+
+# T6-b — Remaining Numerical Discrepancy
+
+Strict CPU and NPU generation streams currently diverge at generation token 0.
+
+Observed behavior:
+
+```text
+CPU argmax != NPU argmax
+
+Δvlogit ≈ 0.5%
+
+The competing top-2 logits remain inside the previously observed
+BF16 numerical envelope.
+```
+
+The leading explanation is a numerical tie-break caused by different arithmetic between the two execution paths.
+
+Current host golden arithmetic
 
 
 
@@ -50,7 +319,23 @@ generation was still marked NOT CLOSED.
 
 
 
+## RPC correctness
 
+The previous zombie/stale-response race is closed.
+
+Old:
+shared request/response state could allow stale worker state to
+interfere with a later request.
+
+Current:
+- per-request protocol
+- unique request sequence
+- anti-replay
+- 7 persistent workers
+- 7/7 heartbeat validation
+
+Result:
+the resident worker pool completed the full T6 E2E run.
 
 
 
