@@ -1,3 +1,52 @@
+
+
+
+
+
+
+
+# XDNA2 / Qwen3.5-9B — Current Status (16 Sep 2026)
+
+The project has crossed the end-to-end execution milestone.
+
+A complete Qwen3.5-9B inference run now executes successfully through
+the direct XDNA2 path:
+
+"The capital of France is"
+→ 8-position NPU prefill
+→ 8 autoregressive generation steps
+→ complete 248,320-logit output at every step
+
+Wall time: 418 s
+
+Generated token IDs:
+26705, 92795, 97950, 99952, 72787, 126104, 126104, 126104
+
+This supersedes the 11 Sep status where end-to-end Qwen3.5-9B
+generation was still marked NOT CLOSED.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # NPU MINIMAL — 9B on NPU without FLM (status 04/09/2026)
 
 **Self-contained and reproducible dossier**: everything required to replay the only 2 NPU paths that produce CLEAN text on this machine. No absolute paths required — binary + DLLs + kernels + models are included in this folder (models are hardlinks → do not delete them here if the source must remain).
