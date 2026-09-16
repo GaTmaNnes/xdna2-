@@ -30,7 +30,21 @@ generation was still marked NOT CLOSED.
 
 
 
-
+| Validation area | Status |
+|---|---|
+| NPU transport / 6 SHA checks | PASS |
+| Signed Q4_0 GEMV | ~95% validated |
+| blk.31 complete differential validation | PASS / bit-exact |
+| Cross-layer validation blk.7/15/23 | PASS |
+| Real-state NPU execution across 8 layers | PASS |
+| 32-layer CPU chain | PASS |
+| Real tokenizer | PASS |
+| Full vocabulary logits 248320/248320 | PASS every step |
+| Resident 7-worker RPC pool | PASS |
+| 8-position NPU prefill | PASS |
+| 8-token autoregressive generation | PASS |
+| CPU/NPU strict stream equivalence | OPEN — T6-b |
+| Long-context / long-generation stability | OPEN |
 
 
 
