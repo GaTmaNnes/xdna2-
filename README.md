@@ -4,7 +4,33 @@
 >
 > This status supersedes the 11 September 2026 status where Qwen3.5-9B end-to-end generation was still marked **NOT CLOSED**.
 
----
+xdna2-     windows opensources                                                                                                                                                           Chargement GGUF             ✅
+
+Q4_0 standard               ✅
+
+Q6_K standard               ✅
+
+Packer XDNA2                ✅
+
+GEMV réel NPU               ✅
+
+Workers / RPC               ✅
+
+Chaîne Qwen3.5              ✅
+
+DeltaNet / états            ✅
+
+LM head NPU                 ✅
+
+E2E CPU-Q4 == NPU-Q4        ✅ 8/8
+
+Golden long                 ✅ 64/64
+
+Cause ancienne divergence   ✅ identifiée
+
+Reproductibilité            🔄 ×3 en cours
+
+Performance                 ❌  en cours
 
 ## End-to-End Milestone
 
