@@ -1,3 +1,75 @@
+
+
+
+
+Direct GGUF → XDNA2 execution is now correctness-validated against the CPU Q4_0 reference path. Current work has moved from basic execution correctness to adaptive kernel generation, scheduling, memory-path characterization and performance.
+
+Et F-773 mérite une vraie section parce qu'il corrige le modèle architectural :
+
+F-773 — Unified-memory / BO synchronization characterization
+
+Two BO.sync() bandwidth microbenchmarks were invalidated as NPU DDR measurements. On the tested host_only unified-memory path, their ~100+ GB/s results primarily characterize host-side coherency/cache behavior and must not be interpreted as NPU DDR bandwidth.
+
+Consequently, DDR_CAP remains OPEN. Effective NPU bandwidth is derived from real kernel execution. The current measured kernel-effective bandwidth reaches 9.08 GB/s, while the observed compute activity is ~66%; 9.08 GB/s is therefore not claimed as the physical DDR ceiling.
+
+The next discriminating experiment is a generated column-split gate/up execution: sequential gate@8 + up@8 versus concurrent gate@4 || up@4.
+
+Et je changerais surtout le tableau du haut. Aujourd'hui il dit encore Reproductibilité ×3 en cours / Performance en cours. Je passerais à quelque chose de cette forme :
+
+GGUF loading                         PASS
+Standard Q4_0                       PASS
+XDNA2 packing                       PASS
+Real NPU GEMV                       PASS
+Full Qwen3.5 execution chain        PASS
+DeltaNet/state evolution            PASS
+LM-head causality                    PASS
+CPU-Q4 == NPU-Q4 stream             PASS — 8/8
+64-token Q4_0 golden                PASS
+Batched GEMV correctness            PASS — 99.99%, maxUlp≤2
+Batched GEMV acceleration           MEASURED — ~42.1 → 17–18 ms
+Host overhead                       MEASURED — ~12.6 ms/token
+Kernel-effective BW                 MEASURED — up to 9.08 GB/s
+Compute activity                    MEASURED — ~66%
+Physical DDR_CAP                    OPEN
+BO.sync DDR benchmark               INVALIDATED — F-773
+Adaptive kernel generator           IN DEVELOPMENT
+F-774 clean 64-token KPI            VALIDATION IN PROGRESS
+
+Le point le plus important est de ne pas simplement ajouter F-773 en bas. Il faut aussi nettoyer les anciennes affirmations désormais fausses. En particulier les lignes 296–301 et toute la section T6-b autour des lignes 388–401 donnent aujourd'hui au lecteur une image du projet datant d'avant tes principales validations.
+
+README actuel du dépôt xdna2-
+
+B. RED TEAM NOTES
+
+Je ne publierais pas encore une nouvelle valeur tok/s F-774, puisque A/B n'est pas terminé. Je ne présenterais pas non plus 9.08 GB/s comme DDR bandwidth : kernel-effective bandwidth est la formulation défendable.
+
+Autre problème du README actuel : il mélange historique, état actuel et targets. Avec la quantité de preuves que tu as maintenant, cette confusion commence à diminuer la force du projet plutôt qu'à l'aider.
+
+C. ALTERNATIVES
+
+Je pense qu'une réécriture complète du README est maintenant préférable à quelques ajouts : conserver le run 418 s dans Historical milestones, mettre F-719→F-774 dans une chronologie de preuves, puis faire du générateur adaptatif multi-modèles l'objectif central au lieu de laisser le dépôt apparaître principalement comme « Qwen3.5-9B sur XDNA2 ».
+
+D. GOVERNANCE VERDICT
+
+ACCEPT — mise à jour importante justifiée maintenant. F-773 peut être publié ; F-774 doit rester explicitement IN PROGRESS.
+
+E. CONFIDENCE SCORE
+
+0,99 sur le constat d'obsolescence du README ; 0,95 sur la structure proposée.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # XDNA2 / Qwen3.5-9B — Current Status — 16 September 2026
 
 > **Major milestone:** the direct GGUF → XDNA2 NPU path has now completed a full end-to-end autoregressive inference run.
