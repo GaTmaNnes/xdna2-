@@ -1,3 +1,456 @@
+# XDNA2 / Qwen3.5-9B — Windows NPU Runtime
+
+> Direct GGUF → XDNA2 execution is correctness-validated against the quantization-matched CPU Q4_0 reference path.
+>
+> The project has moved beyond basic NPU execution. Current work focuses on **end-to-end decode performance, data movement, kernel geometry, fusion, runtime orchestration, scheduling, and model-specialized XDNA2 code generation**.
+
+**Current status: 20 September 2026**
+
+---
+
+## Current Result
+
+The project now runs a real Qwen3.5-9B inference path on the AMD XDNA2 NPU under Windows, including:
+
+* real GGUF tensors;
+* real tokenizer;
+* Q4_0 weight packing;
+* XDNA2 GEMV execution;
+* complete 32-layer model execution;
+* recurrent/state evolution;
+* full 248,320-logit LM head;
+* autoregressive generation;
+* quantization-matched CPU/NPU stream validation;
+* long 64-token correctness validation;
+* persistent in-process execution;
+* batched GEMV;
+* fused SwiGLU path;
+* per-operation performance attribution;
+* host/runtime profiling;
+* XDNA2 kernel generation and compilation experiments.
+
+The main engineering question is no longer:
+
+> **Can the model execute on XDNA2?**
+
+It is now:
+
+> **How close can a generated, model-specialized XDNA2 execution plan get to the useful memory and execution limits of the hardware?**
+
+---
+
+# Current Validation Matrix
+
+| Area                                 | Status                                   |
+| ------------------------------------ | ---------------------------------------- |
+| GGUF loading                         | **PASS**                                 |
+| Standard Q4_0                        | **PASS**                                 |
+| Standard Q6_K reference              | **PASS**                                 |
+| XDNA2 packing                        | **PASS**                                 |
+| Real NPU GEMV                        | **PASS**                                 |
+| Complete Qwen3.5 model chain         | **PASS**                                 |
+| DeltaNet / recurrent state evolution | **PASS**                                 |
+| Full 248,320-logit LM head           | **PASS**                                 |
+| CPU-Q4 == NPU-Q4 generation stream   | **PASS — 8/8**                           |
+| 64-token Q4_0 golden                 | **PASS — 64/64**                         |
+| Batched GEMV                         | **PASS**                                 |
+| Batched GEMV acceleration            | **MEASURED — ~42.1 → 17–18 ms**          |
+| Multi-XCLBIN execution               | **PASS with context lifetime contract**  |
+| Dual / fused SwiGLU                  | **PASS with corrected packing layout**   |
+| 64-token production baseline         | **VALIDATED**                            |
+| F-796 host-I/O optimization          | **MEASURED — 24-token candidate result** |
+| Physical DDR ceiling                 | **OPEN**                                 |
+| Automatic model-wide scheduling      | **IN DEVELOPMENT**                       |
+| Model-specialized kernel generation  | **IN DEVELOPMENT**                       |
+
+---
+
+# Performance Progress
+
+The runtime has moved from an early approximately **1.86 s/token** execution path to a current candidate around **0.667 s/token**.
+
+The important milestones are:
+
+```text
+~1860 ms/token   early complete runtime
+      ↓
+ ~925 ms/token   LM-head path improvement
+      ↓
+ ~893 ms/token   output-projection improvement
+      ↓
+845–872 ms/token clean 64-token baseline campaigns
+      ↓
+ ~804 ms/token   host/environment path cleaned
+      ↓
+ ~773 ms/token   in-process runtime / IPC removed
+      ↓
+ ~730 ms/token   fused SwiGLU path
+      ↓
+ ~667 ms/token   F-796 persistent logging handles
+```
+
+Overall observed improvement from the early runtime:
+
+```text
+~1860 → ~667 ms/token
+≈ 2.79×
+```
+
+### Important measurement note
+
+The **~667 ms/token** F-796 result was measured on a shorter 24-token campaign and is therefore treated as a **candidate record**, not yet as the new long-run 64-token baseline.
+
+Performance decisions are made from longer controlled runs whenever possible.
+
+---
+
+# Correctness
+
+Performance results are not promoted unless the relevant correctness contract passes.
+
+The project has progressively closed several correctness layers:
+
+```text
+GGUF
+  ↓
+Q4_0 decoding
+  ↓
+packing
+  ↓
+buffer layout
+  ↓
+XDNA2 kernel
+  ↓
+layer output
+  ↓
+model state
+  ↓
+LM head
+  ↓
+token stream
+```
+
+A key validation established that the quantization-matched CPU Q4_0 and NPU Q4_0 paths produce the same generation stream:
+
+```text
+CPU-Q4 == NPU-Q4
+8 / 8 tokens
+PASS
+```
+
+A longer 64-token golden run is also validated.
+
+Earlier CPU/NPU divergence was traced to comparison of different numerical paths rather than a failure of the tested NPU Q4_0 execution path.
+
+---
+
+# Batched GEMV
+
+Batching multiple output rows inside the kernel was one of the first major architectural improvements.
+
+Representative result:
+
+```text
+single / earlier path : ~42.1 ms
+batched B=4           : ~17–18 ms
+
+speedup ≈ 2.46×
+```
+
+Correctness:
+
+```text
+49,145 / 49,152 BF16 outputs matched
+max ULP ≤ 2
+```
+
+The important lesson is not simply that batching is faster.
+
+Batching changes how weight traffic, unpacking, dequantization and compute are amortized across outputs.
+
+This is now treated as an execution-plan decision rather than a fixed kernel constant.
+
+---
+
+# Data Movement Is the Dominant Device Problem
+
+The current decode path is globally dominated by **weight/data movement**, not raw MAC throughput.
+
+A recent causal decomposition attributes approximately:
+
+```text
+DEVICE ≈ 590 ms/token
+```
+
+with roughly:
+
+| Family             |    Time |   Effective BW |
+| ------------------ | ------: | -------------: |
+| gate/up fused path | ~221 ms |     ~8.29 GB/s |
+| down               | ~127 ms |     ~7.26 GB/s |
+| q                  |  ~98 ms |     ~6.30 GB/s |
+| o                  |  ~65 ms |     ~4.77 GB/s |
+| head               |  ~58 ms | **~9.80 GB/s** |
+| k+v                |  ~20 ms |      ~7.9 GB/s |
+
+The exact values depend on the tested runtime configuration.
+
+The key result is the large spread in effective bandwidth between operation families.
+
+Therefore:
+
+```text
+effective bandwidth != one universal machine constant
+```
+
+It depends on the execution plan:
+
+```text
+BW_eff = f(
+    operation,
+    layout,
+    packing,
+    tile geometry,
+    DMA organization,
+    batching,
+    runtime boundaries,
+    synchronization
+)
+```
+
+---
+
+# 9.8 GB/s Is Not Claimed as the Physical DDR Limit
+
+The LM-head path currently reaches approximately:
+
+```text
+572 MB / 58.4 ms
+≈ 9.8 GB/s
+```
+
+This is the highest effective bandwidth observed so far in the current execution stack.
+
+It is **not** claimed to be the physical DDR ceiling.
+
+Earlier `BO.sync()` microbenchmarks produced values above 100 GB/s, but those measurements primarily characterized host-side coherency/cache behavior on the tested unified-memory path and were therefore rejected as measurements of NPU DDR bandwidth.
+
+The physical DDR limit remains:
+
+```text
+OPEN
+```
+
+Only timings produced by real NPU kernels are used for current effective-bandwidth claims.
+
+---
+
+# Host Runtime Matters Too
+
+The device is not the whole token wall-clock.
+
+A token crosses a large number of runtime boundaries.
+
+Current measurements show roughly:
+
+```text
+~175 dispatches / token
+```
+
+Host profiling identified several significant costs.
+
+Before F-796, representative host-chain costs included:
+
+```text
+logging / file open / exists    ~80 ms/token
+decode_q40_rows                 ~21 ms/token
+attention                       ~16 ms/token
+NumPy/layout conversions        ~21 ms/token
+```
+
+The logging overhead was particularly important because diagnostic files were repeatedly opened and closed around dispatches.
+
+F-796 changed these paths to persistent file handles while preserving the live metrics stream.
+
+This produced the current short-run candidate around:
+
+```text
+~667 ms/token
+~1.45 token/s
+```
+
+The result demonstrates that runtime engineering remains relevant even when the NPU kernels themselves are memory-bound.
+
+---
+
+# Runtime Cost Model
+
+The current mental model is:
+
+```text
+T_token
+    =
+      T_device
+    + T_host
+    + T_boundaries
+```
+
+More explicitly:
+
+```text
+T_token(P)
+    =
+      T_memory(P)
+    + T_compute(P)
+    + N_boundaries(P) × H_boundary(P)
+    + T_host(P)
+```
+
+where `P` is the complete execution plan.
+
+This is an important change from the original project model.
+
+Optimizing a kernel in isolation is not sufficient if the surrounding execution plan introduces excessive:
+
+* memory traffic;
+* packing;
+* synchronization;
+* dispatch boundaries;
+* conversions;
+* runtime state reconstruction.
+
+---
+
+# Fused SwiGLU
+
+The gate/up path has also been tested as a fused execution problem.
+
+A critical finding was that packing/layout is part of the kernel contract.
+
+A minimal single-column test showed the internal GEMV/SwiGLU computation was correct, while scaling exposed a packing-layout issue.
+
+After correcting the banded packing layout:
+
+```text
+NaN                  0
+deterministic         yes
+tanh-aware error      ~0.64%
+```
+
+The fused path subsequently contributed approximately:
+
+```text
+~65 ms/token
+```
+
+of improvement in the tested runtime.
+
+The broader lesson is:
+
+> **A kernel is not defined only by its arithmetic. Its input packing and memory layout are part of its executable contract.**
+
+---
+
+# XRT Context Lifetime Is Part of Correctness
+
+Multi-XCLBIN experiments exposed an important runtime rule.
+
+An apparent multi-XCLBIN corruption problem was eventually isolated to the lifetime of XRT/Python objects.
+
+Keeping the relevant:
+
+```text
+hardware context
+kernel handle
+buffer objects
+```
+
+alive restores deterministic execution.
+
+Therefore context lifetime is now treated as a correctness requirement.
+
+It is not considered an optional runtime implementation detail.
+
+---
+
+# Column Splitting / NPU Concurrency
+
+Splitting gate/up across separate column groups was tested to determine whether independent NPU work could overlap.
+
+Representative measurements:
+
+```text
+8-column kernel       ~7.9 ms
+4-column kernel      ~12.4 ms
+
+gate4 || up4
+makespan             ~11.9 ms
+overlap               ~0.5 ms
+```
+
+The tested configuration therefore showed essentially no useful NPU↔NPU overlap.
+
+Verdict:
+
+```text
+CHANNEL-LIMITED
+```
+
+This killed the assumption that simply dividing the array into independent column groups would provide near-linear concurrent execution.
+
+CPU↔NPU pipelining remains a separate optimization problem.
+
+---
+
+# Compiler / ISA Findings
+
+Generated source structure is not sufficient to predict the final hardware schedule.
+
+The project now audits the compiler chain through:
+
+```text
+source
+  ↓
+LLVM IR
+  ↓
+Peano
+  ↓
+MIR
+  ↓
+post-RA scheduling
+  ↓
+AIE2P ISA
+```
+
+Several compiler-control hypotheses were tested.
+
+### Register rewrite modes
+
+Different register-rewrite modes produced bit-identical objects/binaries in the tested case.
+
+They were therefore eliminated as a useful optimization knob for that problem.
+
+### Post-pipeliner
+
+Several post-pipeliner controls were tested.
+
+A schedule could be made correctness-safe but was slower than the B2 reference.
+
+Result:
+
+```text
+correct
+but
+no performance gain
+```
+
+This reinforced an important rule:
+
+> Compiler transformations must be evaluated from final ISA + correctness + real NPU timing, not from source-level intent alone.
+
+---
+
+# What We Fa
 
 
 
