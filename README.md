@@ -1,6 +1,6 @@
 Repository note
 
-Some experimental files and research artifacts are intentionally not synchronized with the public repository yet. They may appear in future updates.
+. They may appear in future updates.
 
 Full synchronization may happen around the same time 1bit decides to publicly acknowledge that my work was actually useful to the project. ;)  https://github.com/1bit-MONSTER/1bit-MONSTER
 
