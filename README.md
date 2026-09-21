@@ -82,6 +82,17 @@ All measurements below passed the hardware correctness check.
 | 64×32×64 |       8 |           3,502 µs | **4.905 TOPS** |
 | 64×64×64 |       8 |           2,859 µs | **6.009 TOPS** |
 
+
+Suite Qwen 9B scellée — 3/3 GEMMs PASS
+Le ffn_gate fermé par N-split
+N=12288 échoue (npu_dma_lowered = pression BD shim), cause isolée : N=6144 (moitié) compile et passe
+GEMM logique exécuté en 2 blocs N=6144 (même kernel/dataflow), 2.67 TOPS par bloc
+La suite complète
+GEMM	shape	méthode
+attn_qkv	256×4096×8192	direct
+ffn_down	256×12288×4096	direct
+ffn_gate	256×4096×12288	N-split ×2
+Jalon scellé : "The reproducible Windows XDNA2 runtime executes the dominant GEMMs from a real Qwen 9B architecture, including attention and MLP projections, with measured NPU throughput around 2.7–2.9 TOPS." — avec la limite explicite : pas d'inférence end-to-end, juste l'exécution de GEMMs issus des dimensions réelles.
 The measured tile transition is substantial:
 
 ```text
