@@ -1,3 +1,548 @@
+
+
+# XDNA2 — Adaptive Compilation & Runtime Research on Windows
+
+Experimental research project for **AMD XDNA2 / AIE2P NPUs on Windows**.
+
+The project explores the complete path from generated AIE programs to real NPU execution:
+
+```text
+Workload / Model
+       ↓
+Execution planning
+       ↓
+Kernel generation
+       ↓
+IRON / MLIR-AIE
+       ↓
+Peano / AIE2P
+       ↓
+XCLBIN + instruction stream
+       ↓
+Windows runtime
+       ↓
+XDNA2 hardware
+       ↓
+Correctness validation
+       ↓
+Hardware measurements
+       ↓
+Adaptive planning
+```
+
+The current work has moved beyond basic NPU bring-up.
+
+The stack can generate execution plans, compile them into real XDNA2 programs, execute them on hardware, verify their outputs, measure their performance, and use previous hardware observations to guide future execution choices.
+
+---
+
+## Current Status
+
+| Area                                   | Status          |
+| -------------------------------------- | --------------- |
+| Windows XDNA2 execution                | ✅               |
+| AIE2P kernel compilation               | ✅               |
+| IRON / MLIR-AIE generation             | ✅               |
+| Peano microkernels                     | ✅               |
+| XCLBIN generation                      | ✅               |
+| Real hardware correctness gates        | ✅               |
+| Multi-column execution                 | ✅               |
+| Tile exploration                       | ✅               |
+| ExecutionPlan search                   | ✅               |
+| Hardware-backed cost model             | ✅               |
+| Prospective unseen-workload validation | ✅               |
+| Adaptive planner                       | ✅               |
+| Large GEMM multi-TOPS execution        | ✅               |
+| Predictive kernel selection            | 🔬 Experimental |
+| Global multi-shape cost model          | 🔬 Research     |
+
+---
+
+# Latest Hardware Results
+
+Platform:
+
+* AMD Ryzen AI 9 365
+* XDNA2 / AIE2P
+* Windows 11
+* native AIE2P kernels
+* real XCLBIN execution
+
+## 2048³ INT8 GEMM
+
+All measurements below passed the hardware correctness check.
+
+| Tile     | Columns | Median kernel time |     Throughput |
+| -------- | ------: | -----------------: | -------------: |
+| 32×32×32 |       8 |          10,209 µs | **1.683 TOPS** |
+| 64×32×64 |       8 |           3,502 µs | **4.905 TOPS** |
+| 64×64×64 |       8 |           2,859 µs | **6.009 TOPS** |
+
+The measured tile transition is substantial:
+
+```text
+32×32×32
+1.683 TOPS
+    │
+    │ ×2.91
+    ▼
+64×32×64
+4.905 TOPS
+    │
+    │ ×1.23
+    ▼
+64×64×64
+6.009 TOPS
+```
+
+Overall:
+
+```text
+32³ → 64³ = 3.57×
+```
+
+This demonstrates that the earlier low throughput observed on small workloads was **not a ~0.1-TOPS limitation of the Windows execution path**.
+
+Workload geometry, tiling and data movement strongly determine how much of the XDNA2 array can actually be exploited.
+
+---
+
+# Comparison with a Public Linux Reference
+
+For the directly comparable 2048³ INT8 configurations:
+
+| Configuration           | This project — Windows | Public Linux reference |
+| ----------------------- | ---------------------: | ---------------------: |
+| tile32                  |         **1.683 TOPS** |              1.97 TOPS |
+| tile64                  |         **6.009 TOPS** |              6.65 TOPS |
+| tile32 → tile64 scaling |              **3.57×** |                  3.38× |
+
+The Windows path reaches:
+
+```text
+tile32 : 85.4% of the public Linux result
+tile64 : 90.4% of the public Linux result
+```
+
+More importantly, both environments exhibit a similar large performance transition when moving from the smaller to the larger tile configuration.
+
+These numbers should not be interpreted as a strict cross-platform benchmark: the software stacks, compilation paths and runtime environments differ.
+
+They provide an external reference point for the observed XDNA2 scaling behavior.
+
+---
+
+# Adaptive Execution Planning
+
+A major part of the project is no longer a fixed collection of kernels.
+
+Execution configurations are represented as plans containing hardware-relevant choices such as:
+
+```text
+workload shape
+tile geometry
+column allocation
+parallelism
+data movement
+working set
+execution strategy
+```
+
+Candidate plans pass through feasibility checks before hardware execution.
+
+A cost model then ranks viable candidates and allows the system to concentrate compilation and hardware measurements on promising regions of the search space.
+
+```text
+WorkloadSpec
+     ↓
+Feasibility
+     ↓
+Candidate ExecutionPlans
+     ↓
+Physical cost model
+     ↓
+Top-K
+     ↓
+Compile
+     ↓
+XDNA2
+     ↓
+Correctness
+     ↓
+Measurement
+```
+
+Simpler predictors were deliberately retained as reproducible baselines.
+
+The current physical model was introduced only after controlled hardware experiments exposed limitations in those simpler approaches.
+
+---
+
+# Prospective Prediction
+
+The planner has been tested using a **freeze-before-measurement protocol**.
+
+For a previously unmeasured workload:
+
+1. the model and training dataset were frozen;
+2. all candidate predictions were recorded;
+3. the predicted ranking was committed before compilation;
+4. all candidates were then compiled;
+5. every candidate was executed on the real NPU;
+6. correctness was required;
+7. an exhaustive hardware oracle was constructed.
+
+On the prospective K=1344 experiment:
+
+| Metric          |    Result |
+| --------------- | --------: |
+| Candidate plans |         6 |
+| Predicted Top-1 |  `c4_t64` |
+| Hardware oracle |  `c4_t64` |
+| Top-1 regret    |  **0.0%** |
+| Oracle rank     | **1 / 6** |
+| Spearman        |   **1.0** |
+| MAPE            |  **3.8%** |
+
+The predicted best execution plan was therefore the measured hardware optimum.
+
+This is a prospective result: the workload had not been measured when the ranking was produced.
+
+---
+
+# Predictive Kernel Research
+
+The project also contains experimental work on **predictive kernel and execution-plan selection**.
+
+The objective is to use accumulated hardware behavior to identify promising kernel configurations before paying the full cost of compilation and exhaustive benchmarking.
+
+This work is intentionally experimental.
+
+The current implementation is not presented as a universal XDNA2 performance predictor. Some models are reliable primarily as rankers inside their validated domain, while absolute latency prediction across very different workload scales remains an active research area.
+
+An interesting result is that a frozen planner trained on substantially smaller workloads ranked the high-performance `tile64 / 8-column` region first before the 2048³ configurations were compiled.
+
+The resulting hardware execution reached:
+
+```text
+6.009 TOPS
+```
+
+This motivates continued work on physically informed predictive kernel selection, while broader generalization remains under validation.
+
+---
+
+# Why Physical Features Matter
+
+The hardware experiments show that nominal operation count alone is insufficient to predict XDNA2 performance.
+
+For the same 2048³ INT8 GEMM and the same 8-column configuration:
+
+```text
+tile32³  → 1.683 TOPS
+tile64³  → 6.009 TOPS
+```
+
+A change in execution geometry alone corresponds to a **3.57× throughput difference**.
+
+Current planning research therefore considers quantities related to:
+
+* work distribution;
+* number of active cores;
+* work per core;
+* tile geometry;
+* number of tiles;
+* data movement;
+* working set;
+* transfer count;
+* reuse and parallelism.
+
+The goal is not to encode rules such as "tile64 is faster", but to learn and model the physical consequences of execution-plan choices.
+
+---
+
+# Hardware-in-the-Loop Methodology
+
+Performance claims in this repository follow a hardware validation pipeline.
+
+```text
+Generate
+   ↓
+Compile
+   ↓
+XCLBIN
+   ↓
+Execute on XDNA2
+   ↓
+Correctness gate
+   ↓
+Benchmark
+   ↓
+Record observation
+```
+
+A candidate that fails correctness is not considered a performance result.
+
+For prediction experiments:
+
+```text
+TRAIN
+  ↓
+freeze model
+  ↓
+freeze predictions
+  ↓
+compile
+  ↓
+hardware execution
+  ↓
+correctness
+  ↓
+exhaustive oracle
+  ↓
+regret / ranking evaluation
+```
+
+This separation is important because it prevents hardware results from leaking back into a supposedly prospective prediction.
+
+---
+
+# Evidence Levels
+
+Results are classified using explicit evidence levels.
+
+### PROVEN
+
+Correctness or behavior established using direct controls such as differential validation, hashes, bit-exact comparisons, causal experiments or complete hardware execution.
+
+### MEASURED
+
+A quantity directly observed on hardware.
+
+### SUPPORTED HYPOTHESIS
+
+An interpretation consistent with measurements but not yet experimentally isolated.
+
+### TARGET
+
+A performance or engineering objective that has not yet been demonstrated.
+
+### OPEN
+
+An unresolved research or engineering question.
+
+---
+
+# End-to-End Model Execution
+
+The project originally started from direct model execution on XDNA2.
+
+That work established:
+
+* GGUF loading;
+* standard Q4_0 handling;
+* XDNA2-specific packing;
+* real NPU GEMV;
+* transformer execution;
+* state evolution;
+* LM-head execution;
+* autoregressive generation;
+* CPU-Q4 / NPU-Q4 stream validation;
+* long golden sequences;
+* persistent runtime infrastructure.
+
+These experiments provided the correctness and runtime foundation used by the newer adaptive compiler/planner work.
+
+The project has since expanded from:
+
+```text
+"Can this model execute correctly on XDNA2?"
+```
+
+toward:
+
+```text
+"Which execution program should be generated for this workload?"
+```
+
+---
+
+# Compiler / Runtime Direction
+
+The longer-term architecture is:
+
+```text
+MODEL / WORKLOAD
+       ↓
+Analysis
+       ↓
+Operation extraction
+       ↓
+ExecutionPlan search
+       ↓
+Predictive planning
+       ↓
+Kernel generation
+       ↓
+IRON / MLIR-AIE
+       ↓
+Peano
+       ↓
+XCLBIN / instruction artifacts
+       ↓
+Windows runtime
+       ↓
+XDNA2
+       ↓
+Correctness + performance
+       ↓
+Hardware knowledge
+```
+
+The intent is to progressively replace manually selected configurations with hardware-informed execution planning.
+
+This is still a research system, not a production compiler.
+
+---
+
+# Current Research Directions
+
+Current work focuses on extending the validated search domain beyond the initial GEMM experiments.
+
+Important directions include:
+
+* larger M/N/K domains;
+* additional tile geometries;
+* 1 / 2 / 4 / 8-column execution;
+* DMA scheduling;
+* buffering strategies;
+* data placement;
+* memory reuse;
+* multi-kernel execution;
+* kernel fusion;
+* persistent runtime state;
+* physically constrained cost models;
+* ranking versus absolute-latency calibration;
+* automatic challenger/oracle evaluation.
+
+The next generation of the cost model is intended to preserve the demonstrated ranking behavior while improving latency calibration across very different workload scales.
+
+---
+
+# Reproducibility
+
+Important experiments preserve:
+
+* workload description;
+* ExecutionPlan;
+* generated MLIR;
+* compiled objects;
+* XCLBIN;
+* instruction streams;
+* compiler/runtime provenance;
+* hashes;
+* frozen predictions;
+* hardware measurements;
+* correctness results;
+* oracle results.
+
+This allows planner decisions to be traced back to the actual hardware program that was executed.
+
+Historical reports are retained rather than rewritten so previous project states remain reproducible.
+
+---
+
+# Scope and Limitations
+
+Current results should be interpreted within their demonstrated scope.
+
+The project does **not** currently claim:
+
+* universal optimality across XDNA2 workloads;
+* peak theoretical XDNA2 throughput;
+* a globally calibrated performance model;
+* superiority over every Linux or AMD runtime;
+* a production-ready autonomous compiler.
+
+The demonstrated results are narrower:
+
+* real generated AIE2P programs execute correctly on XDNA2 under Windows;
+* execution-plan choices can change measured performance by several times;
+* the Windows path has reached **6.009 TOPS** on 2048³ INT8 GEMM;
+* directly comparable public Linux results provide an external performance reference;
+* hardware-derived physical features can successfully rank execution plans;
+* a frozen cost model selected the exact hardware-optimal plan on a prospective unseen workload;
+* predictive kernel-selection experiments can identify promising regions of a larger execution space before exhaustive hardware exploration.
+
+---
+
+# Historical Reports
+
+Earlier project states are preserved under `docs/history/`.
+
+They document the progression from minimal NPU execution and numerical validation through complete model execution and toward adaptive compilation.
+
+Historical reports are snapshots and should not be interpreted as the current performance state.
+
+---
+
+# Licensing & Attribution
+
+See:
+
+* `LICENSE`
+* `ATTRIBUTION.md`
+* `UPSTREAM_LICENSES.md`
+
+for licensing terms, upstream projects and research references.
+
+This project builds on and studies components and concepts from the broader AMD/Xilinx AIE ecosystem, including MLIR-AIE, IRON, Peano, XRT and related open research.
+
+---
+
+## Current Research Milestone
+
+The current milestone can be summarized as:
+
+```text
+correct execution
+        ↓
+generated kernels
+        ↓
+hardware search
+        ↓
+physical cost model
+        ↓
+prospective prediction
+        ↓
+adaptive execution planning
+        ↓
+multi-TOPS XDNA2 execution
+```
+
+The next objective is broader generalization: predicting both **which execution plan will win** and **its approximate hardware cost** across substantially different workload regimes.
+
+---
+
+**Last updated:** 21 September 2026
+**Platform:** AMD Ryzen AI 9 365 / XDNA2 / AIE2P / Windows 11
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # XDNA2 / Qwen3.5-9B — Windows NPU Runtime
 
 > Direct GGUF → XDNA2 execution is correctness-validated against the quantization-matched CPU Q4_0 reference path.
